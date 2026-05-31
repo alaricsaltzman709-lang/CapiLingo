@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { motion } from "motion/react";
-import { Trophy, Star, MessageSquare, Gamepad2, ArrowRight, CheckCircle2, BookOpen, Search } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { Trophy, Star, MessageSquare, Gamepad2, ArrowRight, CheckCircle2, BookOpen, Search, Key } from "lucide-react";
 import { Module, StudentProgress } from "../types";
 import CapiMascot from "./CapiMascot";
 
@@ -19,6 +19,64 @@ export default function StudentHome({
 }: StudentHomeProps) {
   const [activeLevel, setActiveLevel] = useState<"basico" | "intermedio" | "avanzado">(progress.level);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Control variables for dynamic password change
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState("");
+  const [isChanging, setIsChanging] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError("");
+    setPasswordSuccess("");
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError("Todos los campos son obligatorios.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError("La nueva contraseña y la confirmación no coinciden.");
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordError("La nueva contraseña debe tener al menos 4 caracteres.");
+      return;
+    }
+
+    setIsChanging(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: progress.userId,
+          currentPassword,
+          newPassword
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setPasswordError(data.error || "La contraseña actual es incorrecta.");
+      } else {
+        setPasswordSuccess("¡Contraseña guardada y sincronizada en Firebase con éxito! 🎉");
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setTimeout(() => setShowPasswordForm(false), 2500);
+      }
+    } catch (err) {
+      setPasswordError("Error al conectar con el servidor.");
+    } finally {
+      setIsChanging(false);
+    }
+  };
 
   // Filter modules based on the selected level and search criteria
   const baseInLevel = modules.filter((mod) => mod.level === activeLevel);
@@ -60,10 +118,28 @@ export default function StudentHome({
           <div className="absolute right-0 bottom-0 top-0 w-1/3 bg-white/10 skew-x-12 translate-x-10 pointer-events-none" />
 
           <div className="space-y-3 z-10">
-            <div className="flex items-center space-x-2 bg-white/15 px-3 py-1 rounded-full max-w-fit text-xs font-bold tracking-wider uppercase border border-white/10">
-              <Star className="w-4 h-4 fill-amber-300 stroke-amber-400" />
-              <span>Estudiante en racha</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center space-x-2 bg-white/15 px-3 py-1 rounded-full max-w-fit text-xs font-bold tracking-wider uppercase border border-white/10">
+                <Star className="w-4 h-4 fill-amber-300 stroke-amber-400" />
+                <span>Estudiante en racha</span>
+              </div>
+              
+              {/* Change password toggler */}
+              <button
+                id="btn-cambiar-contra"
+                onClick={() => {
+                  setShowPasswordForm(!showPasswordForm);
+                  setPasswordError("");
+                  setPasswordSuccess("");
+                }}
+                className="z-20 inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-white/15 hover:bg-white/25 active:scale-95 transition text-xs font-bold rounded-xl uppercase cursor-pointer border border-white/10 shadow-sm"
+                title="Sincronizar y actualizar tu contraseña de estudiante en Google Firebase"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>{showPasswordForm ? "Cerrar Ajustes" : "Cambiar Contraseña"}</span>
+              </button>
             </div>
+            
             <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight">
               ¡Hola, {progress.name}!
             </h2>
@@ -104,6 +180,114 @@ export default function StudentHome({
           />
         </div>
       </div>
+
+      {/* PASSWORD CHANGE PANEL (EXPANDABLE BENTO COMPONENT) */}
+      <AnimatePresence>
+        {showPasswordForm && (
+          <motion.div
+            id="password-change-panel"
+            initial={{ opacity: 0, height: 0, scale: 0.95 }}
+            animate={{ opacity: 1, height: "auto", scale: 1 }}
+            exit={{ opacity: 0, height: 0, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className="bg-bento-card border border-bento-border rounded-3xl p-6 md:p-8 shadow-md overflow-hidden relative"
+          >
+            <div className="max-w-md mx-auto space-y-5">
+              <div className="text-center">
+                <span className="inline-flex rounded-2xl bg-bento-accent/10 p-3 text-bento-accent mb-2 border border-bento-accent/15">
+                  <Key className="w-6 h-6 stroke-[2.5]" />
+                </span>
+                <h4 className="text-xl font-black text-bento-text">Ajustes de Seguridad</h4>
+                <p className="text-xs text-bento-muted leading-relaxed max-w-sm mx-auto">
+                  Modifica tu contraseña a continuación. Los cambios tendrán efecto en tus futuros accesos de inmediato y sincronizados nativamente en Firebase Firestore.
+                </p>
+              </div>
+
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold uppercase text-bento-muted mb-1">Contraseña Actual</label>
+                  <input
+                    id="input-current-password"
+                    type="password"
+                    placeholder="Introduce tu clave actual"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="w-full bg-bento-bg border border-bento-border text-bento-text rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-bento-accent/50 transition-all placeholder:text-bento-muted/50"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold uppercase text-bento-muted mb-1">Nueva Contraseña</label>
+                    <input
+                      id="input-new-password"
+                      type="password"
+                      placeholder="Nueva clave"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full bg-bento-bg border border-bento-border text-bento-text rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-bento-accent/50 transition-all placeholder:text-bento-muted/50"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold uppercase text-bento-muted mb-1">Confirmar</label>
+                    <input
+                      id="input-confirm-password"
+                      type="password"
+                      placeholder="Repetir clave"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full bg-bento-bg border border-bento-border text-bento-text rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-bento-accent/50 transition-all placeholder:text-bento-muted/50"
+                    />
+                  </div>
+                </div>
+
+                {passwordError && (
+                  <motion.p
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-xs text-red-500 font-bold bg-red-500/10 p-3 rounded-2xl border border-red-500/20 text-center"
+                  >
+                    ⚠️ {passwordError}
+                  </motion.p>
+                )}
+
+                {passwordSuccess && (
+                  <motion.p
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-xs text-green-500 font-bold bg-green-500/10 p-3 rounded-2xl border border-green-500/20 text-center"
+                  >
+                    {passwordSuccess}
+                  </motion.p>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    id="btn-cancelar-ajustes"
+                    type="button"
+                    onClick={() => {
+                      setShowPasswordForm(false);
+                      setPasswordError("");
+                      setPasswordSuccess("");
+                    }}
+                    className="flex-1 py-3 px-4 rounded-2xl border border-bento-border text-bento-muted hover:text-bento-text bg-bento-card hover:bg-bento-bg text-xs font-bold uppercase transition"
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    id="btn-actualizar-credenciales"
+                    type="submit"
+                    disabled={isChanging}
+                    className="flex-1 py-3 px-4 rounded-2xl bg-bento-accent hover:bg-bento-accent-hover text-white text-xs font-bold uppercase shadow-md hover:shadow-lg transition disabled:opacity-50"
+                  >
+                    {isChanging ? "Sincronizando..." : "Guardar Cambios"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Level SELECTOR bar (Duolingo style tabs in Bento grid layout) */}
       <div className="space-y-6">

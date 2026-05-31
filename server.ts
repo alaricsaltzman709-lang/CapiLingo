@@ -2,10 +2,11 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import * as dotenv from "dotenv";
 import { getGeneratedModules } from "./src/modules-data.ts";
+import { initializeApp as initFirebaseApp } from "firebase/app";
+import { getFirestore as initFirestore, doc as fireDoc, setDoc as fireSetDoc, getDoc as fireGetDoc, getDocs as fireGetDocs, collection as fireCollection } from "firebase/firestore";
 
 dotenv.config();
 
@@ -18,7 +19,12 @@ const PORT = 3000;
 app.use(express.json());
 
 // Database configuration path
-const DB_PATH = path.join(process.cwd(), "db.json");
+const IS_VERCEL = !!process.env.VERCEL;
+const ORIGINAL_DB_PATH = path.join(process.cwd(), "db.json");
+const VERCEL_DB_PATH = path.join("/tmp", "db.json");
+const DB_PATH = IS_VERCEL ? VERCEL_DB_PATH : ORIGINAL_DB_PATH;
+
+let inMemoryDB: DBStructure | null = null;
 
 // Types for our persistent database
 interface Question {
@@ -114,6 +120,16 @@ const SEED_PROGRESS: StudentProgress[] = [
     completedLessons: ["m-greetings", "m-food", "m-directions", "m-restaurant", "m-interview"],
     lastActive: "Hace 3 días",
     chats: {}
+  },
+  {
+    userId: "st-adrian",
+    name: "Adrian",
+    email: "adrian",
+    level: "basico",
+    exp: 0,
+    completedLessons: [],
+    lastActive: "Hoy",
+    chats: {}
   }
 ];
 
@@ -145,40 +161,233 @@ const SEED_USERS: User[] = [
     passwordHash: "admin123",
     name: "Don Juan (Admin)",
     role: "admin"
+  },
+  {
+    id: "st-adrian",
+    email: "adrian",
+    passwordHash: "adrian123",
+    name: "Adrian",
+    role: "student"
   }
 ];
 
 // Helper functions for file status
 function loadDB(): DBStructure {
+  if (inMemoryDB) {
+    return inMemoryDB;
+  }
+
   const generated = getGeneratedModules();
+  
   try {
-    if (!fs.existsSync(DB_PATH)) {
-      const initialDB: DBStructure = {
-        users: SEED_USERS,
-        modules: generated,
-        progress: SEED_PROGRESS
-      };
+    if (IS_VERCEL) {
+      // 1. On Vercel, check if we have a writable copy in /tmp
+      if (fs.existsSync(VERCEL_DB_PATH)) {
+        try {
+          const data = fs.readFileSync(VERCEL_DB_PATH, "utf8");
+          const db = JSON.parse(data) as DBStructure;
+          inMemoryDB = db;
+          return db;
+        } catch (e) {
+          console.error("Failed to read from Vercel /tmp/db.json, falling back to read-only copy", e);
+        }
+      }
+      
+      // 2. If not, copy from the original read-only workspace path to /tmp/db.json
+      if (fs.existsSync(ORIGINAL_DB_PATH)) {
+        try {
+          const data = fs.readFileSync(ORIGINAL_DB_PATH, "utf8");
+          const db = JSON.parse(data) as DBStructure;
+          if (!db.modules || db.modules.length < 100) {
+            db.modules = generated;
+          }
+          try {
+            fs.writeFileSync(VERCEL_DB_PATH, JSON.stringify(db, null, 2), "utf8");
+          } catch (writeErr) {
+            console.error("Could not write initial Vercel /tmp/db.json copy", writeErr);
+          }
+          inMemoryDB = db;
+          return db;
+        } catch (originalErr) {
+          console.error("Failed to load original read-only db.json", originalErr);
+        }
+      }
+    } else {
+      // Regular development / non-Vercel mode
+      if (fs.existsSync(ORIGINAL_DB_PATH)) {
+        const data = fs.readFileSync(ORIGINAL_DB_PATH, "utf8");
+        const db = JSON.parse(data) as DBStructure;
+        if (!db.modules || db.modules.length < 100) {
+          db.modules = generated;
+          saveDB(db);
+        }
+        inMemoryDB = db;
+        return db;
+      }
+    }
+
+    // Default fallback initialization if neither exists
+    const initialDB: DBStructure = {
+      users: SEED_USERS,
+      modules: generated,
+      progress: SEED_PROGRESS
+    };
+    
+    try {
       fs.writeFileSync(DB_PATH, JSON.stringify(initialDB, null, 2), "utf8");
-      return initialDB;
+    } catch (writeErr) {
+      console.error("Could not save initial DB", writeErr);
     }
-    const data = fs.readFileSync(DB_PATH, "utf8");
-    const db = JSON.parse(data) as DBStructure;
-    if (!db.modules || db.modules.length < 100) {
-      db.modules = generated;
-      saveDB(db);
-    }
-    return db;
+    
+    inMemoryDB = initialDB;
+    return initialDB;
   } catch (error) {
-    console.error("Error loading DB file. Initializing mock empty. Error Details:", error);
-    return { users: SEED_USERS, modules: generated, progress: SEED_PROGRESS };
+    console.error("Error loading DB. Initializing in-memory fallback:", error);
+    const fallbackDB = { users: SEED_USERS, modules: generated, progress: SEED_PROGRESS };
+    inMemoryDB = fallbackDB;
+    return fallbackDB;
   }
 }
 
 function saveDB(db: DBStructure) {
+  inMemoryDB = db;
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
   } catch (error) {
-    console.error("Error writing to DB file:", error);
+    console.error(`Error writing to DB file at ${DB_PATH}:`, error);
+  }
+}
+
+// --- Firebase Synchronizer Integration ---
+let fbApp: any = null;
+let fbDb: any = null;
+
+function getFirebaseFirestore() {
+  if (fbDb) return fbDb;
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      fbApp = initFirebaseApp(config);
+      fbDb = initFirestore(fbApp, config.firestoreDatabaseId);
+      console.log("🔥 Firebase Firestore initialized successfully on CapyLingo Server!");
+      return fbDb;
+    } catch (e) {
+      console.error("Error initializing Firebase App/Firestore:", e);
+    }
+  }
+  return null;
+}
+
+async function syncWithFirebase() {
+  const fDb = getFirebaseFirestore();
+  if (!fDb) {
+    console.log("ℹ️ Firebase config file not found yet. Operating on standard local JSON database.");
+    return;
+  }
+
+  try {
+    console.log("🔄 Synchronizing local database with Firebase Firestore...");
+    const db = loadDB();
+
+    // 1. Fetch modules
+    const modulesSnap = await fireGetDocs(fireCollection(fDb, "modules"));
+    if (!modulesSnap.empty) {
+      const fbModules: Module[] = [];
+      modulesSnap.forEach((doc) => {
+        fbModules.push(doc.data() as Module);
+      });
+      db.modules = fbModules;
+      console.log(`✅ Sincronizados ${fbModules.length} módulos desde Firebase.`);
+    } else {
+      console.log("⬆️ Subiendo módulos locales a Firebase Firestore...");
+      for (const m of db.modules) {
+        await fireSetDoc(fireDoc(fDb, "modules", m.id), m);
+      }
+    }
+
+    // 2. Fetch users
+    const usersSnap = await fireGetDocs(fireCollection(fDb, "users"));
+    if (!usersSnap.empty) {
+      const fbUsers: User[] = [];
+      usersSnap.forEach((doc) => {
+        fbUsers.push(doc.data() as User);
+      });
+      for (const fu of fbUsers) {
+        const index = db.users.findIndex(u => u.id === fu.id);
+        if (index !== -1) {
+          db.users[index] = fu;
+        } else {
+          db.users.push(fu);
+        }
+      }
+      console.log(`✅ Sincronizados ${fbUsers.length} usuarios desde Firebase.`);
+    } else {
+      console.log("⬆️ Subiendo usuarios locales a Firebase Firestore...");
+      for (const u of db.users) {
+        await fireSetDoc(fireDoc(fDb, "users", u.id), u);
+      }
+    }
+
+    // 3. Fetch progress
+    const progressSnap = await fireGetDocs(fireCollection(fDb, "progress"));
+    if (!progressSnap.empty) {
+      const fbProgress: StudentProgress[] = [];
+      progressSnap.forEach((doc) => {
+        fbProgress.push(doc.data() as StudentProgress);
+      });
+      for (const fp of fbProgress) {
+        const index = db.progress.findIndex(p => p.userId === fp.userId);
+        if (index !== -1) {
+          db.progress[index] = fp;
+        } else {
+          db.progress.push(fp);
+        }
+      }
+      console.log(`✅ Sincronizado progreso de ${fbProgress.length} estudiantes desde Firebase.`);
+    } else {
+      console.log("⬆️ Subiendo progresos locales a Firebase Firestore...");
+      for (const p of db.progress) {
+        await fireSetDoc(fireDoc(fDb, "progress", p.userId), p);
+      }
+    }
+
+    saveDB(db);
+  } catch (err) {
+    console.error("⚠️ Error synchronizing with Firebase Firestore:", err);
+  }
+}
+
+async function syncUserToFirebase(user: User) {
+  const fDb = getFirebaseFirestore();
+  if (!fDb) return;
+  try {
+    await fireSetDoc(fireDoc(fDb, "users", user.id), user);
+    console.log(`👤 Usuario ${user.email} guardado en Firestore.`);
+  } catch (err) {
+    console.error(`Error saving user ${user.id} to Firestore:`, err);
+  }
+}
+
+async function syncProgressToFirebase(progress: StudentProgress) {
+  const fDb = getFirebaseFirestore();
+  if (!fDb) return;
+  try {
+    await fireSetDoc(fireDoc(fDb, "progress", progress.userId), progress);
+    console.log(`📈 Progreso de ${progress.userId} guardado en Firestore.`);
+  } catch (err) {
+    console.error(`Error saving progress ${progress.userId} to Firestore:`, err);
+  }
+}
+
+async function syncModuleToFirebase(module: Module) {
+  const fDb = getFirebaseFirestore();
+  if (!fDb) return;
+  try {
+    await fireSetDoc(fireDoc(fDb, "modules", module.id), module);
+    console.log(`📚 Módulo de aprendizaje ${module.id} guardado en Firestore.`);
+  } catch (err) {
+    console.error(`Error saving module ${module.id} to Firestore:`, err);
   }
 }
 
@@ -212,6 +421,10 @@ app.post("/api/modules", (req, res) => {
 
   db.modules.push(newModule);
   saveDB(db);
+  
+  // Background cloud synchronization to Firebase
+  syncModuleToFirebase(newModule);
+
   res.status(201).json({ success: true, module: newModule });
 });
 
@@ -270,6 +483,11 @@ app.post("/api/auth/register", (req, res) => {
   db.progress.push(studentProgress);
 
   saveDB(db);
+
+  // Background cloud synchronization to Firebase
+  syncUserToFirebase(newUser);
+  syncProgressToFirebase(studentProgress);
+
   res.status(201).json({
     success: true,
     user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role }
@@ -295,10 +513,42 @@ app.post("/api/auth/login", (req, res) => {
     return;
   }
 
+  // Trigger general Firebase sync in-background
+  syncWithFirebase();
+
   res.json({
     success: true,
     user: { id: user.id, name: user.name, email: user.email, role: user.role }
   });
+});
+
+// Endpoint to change password safely and sync it with Firebase Firestore
+app.post("/api/auth/change-password", (req, res) => {
+  const { userId, currentPassword, newPassword } = req.body;
+  if (!userId || !currentPassword || !newPassword) {
+    res.status(400).json({ error: "Faltan datos obligatorios para cambiar la contraseña (userId, contraseña actual, nueva contraseña)" });
+    return;
+  }
+
+  const db = loadDB();
+  const user = db.users.find(u => u.id === userId);
+  if (!user) {
+    res.status(404).json({ error: "Usuario no encontrado." });
+    return;
+  }
+
+  if (user.passwordHash !== currentPassword) {
+    res.status(401).json({ error: "La contraseña actual es incorrecta." });
+    return;
+  }
+
+  user.passwordHash = newPassword;
+  saveDB(db);
+
+  // Sync with Firebase in the background
+  syncUserToFirebase(user);
+
+  res.json({ success: true, message: "¡Contraseña cambiada exitosamente!" });
 });
 
 // 3. Student progress and metrics
@@ -357,6 +607,10 @@ app.post("/api/progress/update", (req, res) => {
   progress.lastActive = "Hoy";
 
   saveDB(db);
+
+  // Background cloud synchronization to Firebase
+  syncProgressToFirebase(progress);
+
   res.json({ success: true, progress });
 });
 
@@ -483,6 +737,9 @@ Tus objetivos principales son:
 
     saveDB(db);
 
+    // Background cloud synchronization to Firebase
+    syncProgressToFirebase(student);
+
     res.json({
       success: true,
       text: replyText,
@@ -498,6 +755,10 @@ Tus objetivos principales son:
       timestamp: clientTimestamp
     });
     saveDB(db);
+
+    // Background cloud synchronization to Firebase
+    syncProgressToFirebase(student);
+
     res.json({
       success: true,
       text: fallbackErrReply,
@@ -510,6 +771,7 @@ Tus objetivos principales son:
 // 5. Integrate Vite Server for asset loading & frontend integration
 async function runServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -528,7 +790,12 @@ async function runServer() {
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`CapyLingo Full-Stack Server running at http://localhost:${PORT}`);
+      // Perform initial backup validation/restoration with Firebase Cloud Firestore
+      syncWithFirebase();
     });
+  } else {
+    // Under Vercel, also attempt fire-and-forget sync on startup
+    syncWithFirebase();
   }
 }
 

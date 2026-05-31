@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents an authenticated user (student or admin) and their password",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user ID" },
+        "email": { "type": "string", "description": "Email or login user identifier in lowercase" },
+        "passwordHash": { "type": "string", "description": "Secure password representation" },
+        "name": { "type": "string", "description": "Full name or screen name" },
+        "role": { "type": "string", "enum": ["student", "admin"], "description": "The authorization role of the user" }
+      },
+      "required": ["id", "email", "passwordHash", "name", "role"]
+    },
+    "Module": {
+      "title": "Module",
+      "description": "An interactive language learning module setup containing questions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique module identifier" },
+        "level": { "type": "string", "enum": ["basico", "intermedio", "avanzado"], "description": "Difficulty level" },
+        "title": { "type": "string", "description": "Title of the lesson" },
+        "description": { "type": "string", "description": "Brief description of the lesson content" },
+        "vocabulary": { "type": "array", "description": "Key words taught in this module" },
+        "phrases": { "type": "array", "description": "Example phrases with translations" },
+        "questions": { "type": "array", "description": "Interactive question structures" }
+      },
+      "required": ["id", "level", "title", "description"]
+    },
+    "StudentProgress": {
+      "title": "StudentProgress",
+      "description": "Persisted academic progress records, experience points, completed modules, chat history, and last active moment",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID matching the User record" },
+        "name": { "type": "string", "description": "User's display name" },
+        "email": { "type": "string", "description": "User's contact email" },
+        "level": { "type": "string", "enum": ["basico", "intermedio", "avanzado"], "description": "Selected English learning level" },
+        "exp": { "type": "number", "description": "Accrued Experience Points (XP)" },
+        "completedLessons": { "type": "array", "description": "List of completed learning module IDs" },
+        "lastActive": { "type": "string", "description": "Readable string or date of last active usage" },
+        "chats": { "type": "object", "description": "Historic AI tutor conversation grouped by moduleId" }
+      },
+      "required": ["userId", "name", "email", "level", "exp", "completedLessons"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User login credentials and roles"
+    },
+    "modules/{moduleId}": {
+      "schema": { "$ref": "#/entities/Module" },
+      "description": "CapyLingo learning modules definition"
+    },
+    "progress/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProgress" },
+      "description": "Tracks learner metrics, completed modules, and tutor chat sessions"
+    }
+  }
+}
