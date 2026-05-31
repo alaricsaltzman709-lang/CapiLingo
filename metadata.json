@@ -1,0 +1,6 @@
+{
+  "name": "CapyLingo",
+  "description": "Aprende inglés divirtiéndote en el modo Duolingo con tu simpática mascota carpincho, Capi. Incluye juegos interactivos, agente de práctica con IA y panel de administración.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

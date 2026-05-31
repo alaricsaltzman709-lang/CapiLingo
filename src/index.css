@@ -1,0 +1,57 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --color-bento-bg: #F8FAFC;
+  --color-bento-card: #FFFFFF;
+  --color-bento-border: #E2E8F0;
+  --color-bento-accent: #6366F1;
+  --color-bento-accent-hover: #4F46E5;
+  --color-bento-text: #0F172A;
+  --color-bento-muted: #64748B;
+  --bento-pattern-color: rgba(99, 102, 241, 0.03);
+  --color-bento-streak-bg: rgba(245, 158, 11, 0.1);
+  --color-bento-streak-text: #D97706;
+}
+
+.dark {
+  --color-bento-bg: #0A0C10;
+  --color-bento-card: #161B22;
+  --color-bento-border: #21262D;
+  --color-bento-accent: #6366F1;
+  --color-bento-accent-hover: #4F46E5;
+  --color-bento-text: #E2E8F0;
+  --color-bento-muted: #8B949E;
+  --bento-pattern-color: rgba(99, 102, 241, 0.06);
+  --color-bento-streak-bg: rgba(245, 158, 11, 0.1);
+  --color-bento-streak-text: #F59E0B;
+}
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-bento-bg: var(--color-bento-bg);
+  --color-bento-card: var(--color-bento-card);
+  --color-bento-border: var(--color-bento-border);
+  --color-bento-accent: var(--color-bento-accent);
+  --color-bento-accent-hover: var(--color-bento-accent-hover);
+  --color-bento-text: var(--color-bento-text);
+  --color-bento-muted: var(--color-bento-muted);
+}
+
+/* Fluid keyframe animations for gamification feedback */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+.animate-shake {
+  animation: shake 0.35s ease-in-out;
+}
+
+.bento-grid-pattern {
+  background-image: radial-gradient(circle at 1px 1px, var(--bento-pattern-color) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
