@@ -524,9 +524,14 @@ async function runServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`CapyLingo Full-Stack Server running at http://localhost:${PORT}`);
-  });
+  // Only bind port if not running in a serverless environment like Vercel
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`CapyLingo Full-Stack Server running at http://localhost:${PORT}`);
+    });
+  }
 }
 
 runServer();
+
+export default app;

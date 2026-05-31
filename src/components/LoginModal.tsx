@@ -59,16 +59,41 @@ export default function LoginModal({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      // Handle non-JSON response gracefully (e.g., if Vercel server fails or falls back to static HTML 404)
+      const contentType = res.headers.get("content-type") || "";
+      let data: any = {};
+      
+      if (contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const textResponse = await res.text();
+        console.warn("Respuesta no-JSON recibida del servidor:", textResponse.substring(0, 200));
+        throw new Error(
+          "El servidor de Vercel devolvió una respuesta no válida (HTML) en lugar del formato de API JSON esperado. Asegúrate de volver a compilar y desplegar con la configuración de vercel.json."
+        );
+      }
+
       if (!res.ok) {
-        throw new Error(data.error || "Algo salió mal.");
+        throw new Error(data.error || "Algo salió mal al autenticar.");
       }
 
       // Success
       onLoginSuccess(data.user);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || "Error al conectar con el servidor.");
+      console.error("Auth error details:", err);
+      let friendlyError = err.message || "Error al conectar con el servidor.";
+      
+      // Translate common Safari/WebKit JSON parsers and fetch pattern errors
+      if (
+        friendlyError.includes("The string did not match the expected pattern") || 
+        friendlyError.includes("JSON Parse error") ||
+        friendlyError.includes("Unexpected token")
+      ) {
+        friendlyError = "El servidor no respondió en el formato JSON esperado. Comprueba que el backend de Vercel esté activo e intenta de nuevo.";
+      }
+      
+      setErrorMsg(friendlyError);
     } finally {
       setLoading(false);
     }
