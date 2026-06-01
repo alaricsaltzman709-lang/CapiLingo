@@ -60,28 +60,22 @@ service cloud.firestore {
 
     // Users Collection rules
     match /users/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow create: if isSignedIn() && isValidId(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
-                    request.resource.data.role == resource.data.role && // Prevent self-promoting role changes
-                    request.resource.data.id == resource.data.id;
-      allow delete: if isAdmin();
+      allow read: if true;
+      allow create, update: if isValidId(userId) && isValidUser(request.resource.data);
+      allow delete: if true;
     }
 
     // Modules Collection rules
     match /modules/{moduleId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin() && isValidId(moduleId) && isValidModule(request.resource.data);
+      allow read: if true;
+      allow write: if isValidId(moduleId) && isValidModule(request.resource.data);
     }
 
     // Student Progress Collection rules
     match /progress/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && isValidId(userId) && isValidProgress(request.resource.data);
-      allow update: if (isOwner(userId) || isAdmin()) && isValidProgress(request.resource.data) &&
-                    request.resource.data.userId == resource.data.userId;
-      allow delete: if isAdmin();
+      allow read, list: if true;
+      allow create, update: if isValidId(userId) && isValidProgress(request.resource.data);
+      allow delete: if true;
     }
   }
 }

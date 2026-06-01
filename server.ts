@@ -6,7 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import * as dotenv from "dotenv";
 import { getGeneratedModules } from "./src/modules-data.ts";
 import { initializeApp as initFirebaseApp } from "firebase/app";
-import { getFirestore as initFirestore, doc as fireDoc, setDoc as fireSetDoc, getDoc as fireGetDoc, getDocs as fireGetDocs, collection as fireCollection } from "firebase/firestore";
+import { getFirestore as initFirestore, doc as fireDoc, setDoc as fireSetDoc, getDoc as fireGetDoc, getDocs as fireGetDocs, collection as fireCollection, deleteDoc as fireDeleteDoc } from "firebase/firestore";
 
 dotenv.config();
 
@@ -391,24 +391,154 @@ async function syncModuleToFirebase(module: Module) {
   }
 }
 
+// --- Direct Firestore Database Drivers (Dual-Mode: Cloud Primary, Local Fallback) ---
+async function fetchModules(): Promise<Module[]> {
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      const snap = await fireGetDocs(fireCollection(fDb, "modules"));
+      if (!snap.empty) {
+        const list: Module[] = [];
+        snap.forEach((doc) => {
+          list.push(doc.data() as Module);
+        });
+        return list;
+      }
+    } catch (e) {
+      console.error("Error fetching modules from Firestore:", e);
+    }
+  }
+  return loadDB().modules;
+}
+
+async function fetchUsers(): Promise<User[]> {
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      const snap = await fireGetDocs(fireCollection(fDb, "users"));
+      if (!snap.empty) {
+        const list: User[] = [];
+        snap.forEach((doc) => {
+          list.push(doc.data() as User);
+        });
+        return list;
+      }
+    } catch (e) {
+      console.error("Error fetching users from Firestore:", e);
+    }
+  }
+  return loadDB().users;
+}
+
+async function fetchProgressLogs(): Promise<StudentProgress[]> {
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      const snap = await fireGetDocs(fireCollection(fDb, "progress"));
+      if (!snap.empty) {
+        const list: StudentProgress[] = [];
+        snap.forEach((doc) => {
+          list.push(doc.data() as StudentProgress);
+        });
+        return list;
+      }
+    } catch (e) {
+      console.error("Error fetching progress from Firestore:", e);
+    }
+  }
+  return loadDB().progress;
+}
+
+async function saveModule(module: Module) {
+  const db = loadDB();
+  const index = db.modules.findIndex(m => m.id === module.id);
+  if (index !== -1) db.modules[index] = module;
+  else db.modules.push(module);
+  saveDB(db);
+
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      await fireSetDoc(fireDoc(fDb, "modules", module.id), module);
+    } catch (e) {
+      console.error(`Error saving module ${module.id} to Firestore:`, e);
+    }
+  }
+}
+
+async function deleteModule(id: string) {
+  const db = loadDB();
+  const index = db.modules.findIndex(m => m.id === id);
+  if (index !== -1) {
+    db.modules.splice(index, 1);
+    saveDB(db);
+  }
+
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      await fireDeleteDoc(fireDoc(fDb, "modules", id));
+    } catch (e) {
+      console.error(`Error deleting module ${id} from Firestore:`, e);
+    }
+  }
+}
+
+async function saveUser(user: User) {
+  const db = loadDB();
+  const index = db.users.findIndex(u => u.id === user.id);
+  if (index !== -1) db.users[index] = user;
+  else db.users.push(user);
+  saveDB(db);
+
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      await fireSetDoc(fireDoc(fDb, "users", user.id), user);
+    } catch (e) {
+      console.error(`Error saving user ${user.id} to Firestore:`, e);
+    }
+  }
+}
+
+async function saveProgress(progress: StudentProgress) {
+  const db = loadDB();
+  const index = db.progress.findIndex(p => p.userId === progress.userId);
+  if (index !== -1) db.progress[index] = progress;
+  else db.progress.push(progress);
+  saveDB(db);
+
+  const fDb = getFirebaseFirestore();
+  if (fDb) {
+    try {
+      await fireSetDoc(fireDoc(fDb, "progress", progress.userId), progress);
+    } catch (e) {
+      console.error(`Error saving progress ${progress.userId} to Firestore:`, e);
+    }
+  }
+}
+
 // Ensure database file is generated at startup
 loadDB();
 
 // API ENDPOINTS
 
 // 1. Module Management
-app.get("/api/modules", (req, res) => {
-  const db = loadDB();
-  res.json({ modules: db.modules });
+app.get("/api/modules", async (req, res) => {
+  try {
+    const modules = await fetchModules();
+    res.json({ modules });
+  } catch (error) {
+    res.status(500).json({ error: "Error al recuperar los módulos." });
+  }
 });
 
-app.post("/api/modules", (req, res) => {
+app.post("/api/modules", async (req, res) => {
   const { level, title, description, vocabulary, phrases, questions } = req.body;
   if (!level || !title || !description) {
     res.status(400).json({ error: "Level, Title, and Description are required properties." });
     return;
   }
-  const db = loadDB();
   const newModule: Module = {
     id: "m-" + Date.now(),
     level,
@@ -419,30 +549,32 @@ app.post("/api/modules", (req, res) => {
     questions: questions || []
   };
 
-  db.modules.push(newModule);
-  saveDB(db);
-  
-  // Background cloud synchronization to Firebase
-  syncModuleToFirebase(newModule);
-
-  res.status(201).json({ success: true, module: newModule });
+  try {
+    await saveModule(newModule);
+    res.status(201).json({ success: true, module: newModule });
+  } catch (error) {
+    res.status(500).json({ error: "Error al crear el módulo." });
+  }
 });
 
-app.delete("/api/modules/:id", (req, res) => {
+app.delete("/api/modules/:id", async (req, res) => {
   const { id } = req.params;
-  const db = loadDB();
-  const index = db.modules.findIndex((m) => m.id === id);
-  if (index === -1) {
-    res.status(404).json({ error: "Module not found." });
-    return;
+  try {
+    const modules = await fetchModules();
+    const index = modules.findIndex((m) => m.id === id);
+    if (index === -1) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    await deleteModule(id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al eliminar el módulo." });
   }
-  db.modules.splice(index, 1);
-  saveDB(db);
-  res.json({ success: true });
 });
 
 // 2. Authentication APIs
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   const username = req.body.username || req.body.email;
   const password = req.body.password;
   const studentLevel = req.body.studentLevel || "basico";
@@ -452,49 +584,48 @@ app.post("/api/auth/register", (req, res) => {
     return;
   }
 
-  const db = loadDB();
-  const exists = db.users.some(u => u.email.toLowerCase() === username.toLowerCase());
-  if (exists) {
-    res.status(400).json({ error: "El nombre de usuario ya está registrado." });
-    return;
+  try {
+    const users = await fetchUsers();
+    const exists = users.some(u => u.email.toLowerCase() === username.toLowerCase());
+    if (exists) {
+      res.status(400).json({ error: "El nombre de usuario ya está registrado." });
+      return;
+    }
+
+    const userId = "u-" + Date.now();
+    const newUser: User = {
+      id: userId,
+      email: username.toLowerCase(), // Representing username in the email property for backwards compat
+      passwordHash: password,
+      name: username, // Use username as name
+      role: "student" // ALWAYS create student, never allow admin creation!
+    };
+
+    const studentProgress: StudentProgress = {
+      userId,
+      name: username,
+      email: username.toLowerCase(),
+      level: studentLevel,
+      exp: 0,
+      completedLessons: [],
+      lastActive: "Hoy",
+      chats: {}
+    };
+
+    await saveUser(newUser);
+    await saveProgress(studentProgress);
+
+    res.status(201).json({
+      success: true,
+      user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role }
+    });
+  } catch (error) {
+    console.error("Error durante el registro:", error);
+    res.status(500).json({ error: "Error al registrar el usuario en Firestore." });
   }
-
-  const userId = "u-" + Date.now();
-  const newUser: User = {
-    id: userId,
-    email: username.toLowerCase(), // Representing username in the email property for backwards compat
-    passwordHash: password,
-    name: username, // Use username as name
-    role: "student" // ALWAYS create student, never allow admin creation!
-  };
-
-  db.users.push(newUser);
-
-  const studentProgress: StudentProgress = {
-    userId,
-    name: username,
-    email: username.toLowerCase(),
-    level: studentLevel,
-    exp: 0,
-    completedLessons: [],
-    lastActive: "Hoy",
-    chats: {}
-  };
-  db.progress.push(studentProgress);
-
-  saveDB(db);
-
-  // Background cloud synchronization to Firebase
-  syncUserToFirebase(newUser);
-  syncProgressToFirebase(studentProgress);
-
-  res.status(201).json({
-    success: true,
-    user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role }
-  });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const username = req.body.username || req.body.email;
   const password = req.body.password;
   if (!username || !password) {
@@ -502,116 +633,129 @@ app.post("/api/auth/login", (req, res) => {
     return;
   }
 
-  const db = loadDB();
-  const user = db.users.find(u => {
-    const isDirectMatch = u.email.toLowerCase() === username.toLowerCase();
-    const isEmailPrefixMatch = u.email.includes("@") && u.email.split("@")[0].toLowerCase() === username.toLowerCase();
-    return (isDirectMatch || isEmailPrefixMatch) && u.passwordHash === password;
-  });
-  if (!user) {
-    res.status(401).json({ error: "Credenciales incorrectas. Intenta de nuevo." });
-    return;
+  try {
+    const users = await fetchUsers();
+    const user = users.find(u => {
+      const isDirectMatch = u.email.toLowerCase() === username.toLowerCase();
+      const isEmailPrefixMatch = u.email.includes("@") && u.email.split("@")[0].toLowerCase() === username.toLowerCase();
+      return (isDirectMatch || isEmailPrefixMatch) && u.passwordHash === password;
+    });
+
+    if (!user) {
+      res.status(401).json({ error: "Credenciales incorrectas. Intenta de nuevo." });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+    });
+  } catch (error) {
+    console.error("Error durante el login:", error);
+    res.status(500).json({ error: "Error de servidor al iniciar sesión." });
   }
-
-  // Trigger general Firebase sync in-background
-  syncWithFirebase();
-
-  res.json({
-    success: true,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role }
-  });
 });
 
 // Endpoint to change password safely and sync it with Firebase Firestore
-app.post("/api/auth/change-password", (req, res) => {
+app.post("/api/auth/change-password", async (req, res) => {
   const { userId, currentPassword, newPassword } = req.body;
   if (!userId || !currentPassword || !newPassword) {
     res.status(400).json({ error: "Faltan datos obligatorios para cambiar la contraseña (userId, contraseña actual, nueva contraseña)" });
     return;
   }
 
-  const db = loadDB();
-  const user = db.users.find(u => u.id === userId);
-  if (!user) {
-    res.status(404).json({ error: "Usuario no encontrado." });
-    return;
+  try {
+    const users = await fetchUsers();
+    const user = users.find(u => u.id === userId);
+    if (!user) {
+      res.status(404).json({ error: "Usuario no encontrado." });
+      return;
+    }
+
+    if (user.passwordHash !== currentPassword) {
+      res.status(401).json({ error: "La contraseña actual es incorrecta." });
+      return;
+    }
+
+    user.passwordHash = newPassword;
+    await saveUser(user);
+
+    res.json({ success: true, message: "¡Contraseña cambiada exitosamente!" });
+  } catch (error) {
+    res.status(500).json({ error: "Error al actualizar la contraseña." });
   }
-
-  if (user.passwordHash !== currentPassword) {
-    res.status(401).json({ error: "La contraseña actual es incorrecta." });
-    return;
-  }
-
-  user.passwordHash = newPassword;
-  saveDB(db);
-
-  // Sync with Firebase in the background
-  syncUserToFirebase(user);
-
-  res.json({ success: true, message: "¡Contraseña cambiada exitosamente!" });
 });
 
 // 3. Student progress and metrics
-app.get("/api/progress/:userId", (req, res) => {
+app.get("/api/progress/:userId", async (req, res) => {
   const { userId } = req.params;
-  const db = loadDB();
-  const progress = db.progress.find((p) => p.userId === userId);
-  if (!progress) {
-    res.status(404).json({ error: "Progress not found for this student" });
-    return;
+  try {
+    const progressLogs = await fetchProgressLogs();
+    const progress = progressLogs.find((p) => p.userId === userId);
+    if (!progress) {
+      res.status(404).json({ error: "Progress not found for this student" });
+      return;
+    }
+    res.json({ progress });
+  } catch (error) {
+    res.status(500).json({ error: "Error al recuperar el progreso." });
   }
-  res.json({ progress });
 });
 
-app.get("/api/students", (req, res) => {
-  const db = loadDB();
-  res.json({ students: db.progress });
+app.get("/api/students", async (req, res) => {
+  try {
+    const progressLogs = await fetchProgressLogs();
+    res.json({ students: progressLogs });
+  } catch (error) {
+    res.status(500).json({ error: "Error al recuperar alumnos." });
+  }
 });
 
-app.post("/api/progress/update", (req, res) => {
+app.post("/api/progress/update", async (req, res) => {
   const { userId, exp, completedModuleId, level } = req.body;
   if (!userId) {
     res.status(400).json({ error: "userId is required to update progress" });
     return;
   }
 
-  const db = loadDB();
-  let progress = db.progress.find((p) => p.userId === userId);
+  try {
+    const progressLogs = await fetchProgressLogs();
+    let progress = progressLogs.find((p) => p.userId === userId);
 
-  if (!progress) {
-    const userObj = db.users.find((u) => u.id === userId);
-    progress = {
-      userId,
-      name: userObj?.name || "Estudiante",
-      email: userObj?.email || "",
-      level: level || "basico",
-      exp: 0,
-      completedLessons: [],
-      lastActive: "Hoy",
-      chats: {}
-    };
-    db.progress.push(progress);
-  }
-
-  if (exp) {
-    progress.exp += exp;
-  }
-  if (level) {
-    progress.level = level;
-  }
-  if (completedModuleId) {
-    if (!progress.completedLessons.includes(completedModuleId)) {
-      progress.completedLessons.push(completedModuleId);
+    if (!progress) {
+      const users = await fetchUsers();
+      const userObj = users.find((u) => u.id === userId);
+      progress = {
+        userId,
+        name: userObj?.name || "Estudiante",
+        email: userObj?.email || "",
+        level: level || "basico",
+        exp: 0,
+        completedLessons: [],
+        lastActive: "Hoy",
+        chats: {}
+      };
     }
+
+    if (exp) {
+      progress.exp += exp;
+    }
+    if (level) {
+      progress.level = level;
+    }
+    if (completedModuleId) {
+      if (!progress.completedLessons.includes(completedModuleId)) {
+        progress.completedLessons.push(completedModuleId);
+      }
+    }
+    progress.lastActive = "Hoy";
+
+    await saveProgress(progress);
+
+    res.json({ success: true, progress });
+  } catch (error) {
+    res.status(500).json({ error: "Error al guardar el progreso." });
   }
-  progress.lastActive = "Hoy";
-
-  saveDB(db);
-
-  // Background cloud synchronization to Firebase
-  syncProgressToFirebase(progress);
-
-  res.json({ success: true, progress });
 });
 
 // 4. Gemini AI Practice Agent Chat (lazy loading client definition)
@@ -644,62 +788,64 @@ app.post("/api/gemini/chat", async (req, res) => {
     return;
   }
 
-  const db = loadDB();
-  const currentModule = db.modules.find(m => m.id === moduleId);
-  const student = db.progress.find(p => p.userId === userId);
+  try {
+    const modules = await fetchModules();
+    const currentModule = modules.find(m => m.id === moduleId);
 
-  const topicName = currentModule ? currentModule.title : "Inglés general";
-  const vocabulary = currentModule ? currentModule.vocabulary.join(", ") : "Vocabulario general";
-  const levelText = currentModule ? currentModule.level : (student ? student.level : "basico");
+    const progressLogs = await fetchProgressLogs();
+    const student = progressLogs.find(p => p.userId === userId);
 
-  // Ensure student has a chat log structure
-  if (!student) {
-    res.status(404).json({ error: "Student not found in progress logs." });
-    return;
-  }
-  if (!student.chats) {
-    student.chats = {};
-  }
-  if (!student.chats[moduleId]) {
-    student.chats[moduleId] = [];
-  }
+    if (!student) {
+      res.status(404).json({ error: "Student not found in progress logs." });
+      return;
+    }
 
-  // Push user message to persistent DB history
-  const clientTimestamp = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
-  student.chats[moduleId].push({
-    role: "user",
-    text: message,
-    timestamp: clientTimestamp
-  });
+    const topicName = currentModule ? currentModule.title : "Inglés general";
+    const vocabulary = currentModule ? currentModule.vocabulary.join(", ") : "Vocabulario general";
+    const levelText = currentModule ? currentModule.level : student.level;
 
-  const aiClient = getGeminiClient();
+    if (!student.chats) {
+      student.chats = {};
+    }
+    if (!student.chats[moduleId]) {
+      student.chats[moduleId] = [];
+    }
 
-  if (!aiClient) {
-    // Elegant fallback simulation if no API Key is added yet
-    const responses = [
-      `¡Churr churr! *Capi mastica un poco de pasto* Me encanta hablar de "${topicName}". Has aprendido sobre: ${vocabulary}. ¡Tu inglés suena fantástico para el nivel ${levelText}! ¿Hay alguna palabra de esas que quieras que usemos en otra oración?`,
-      `*Capi flota feliz en su tina de agua caliente* ¡Perfecto! Tu mensaje es muy interesante. Recuerda que con esfuerzo serás todo un experto. ¿Me puedes decir cuál es tu fruta favorita en inglés?`,
-      `*Capi te guiña un ojo alegremente* ¡Excelente práctica! Sigamos platicando. ¿Qué opinas de practicar frases de agradecimiento? *churr churr*`
-    ];
-    const mockReply = responses[Math.floor(Math.random() * responses.length)];
-
+    // Push user message to persistent DB history
+    const clientTimestamp = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
     student.chats[moduleId].push({
-      role: "model",
-      text: mockReply,
+      role: "user",
+      text: message,
       timestamp: clientTimestamp
     });
 
-    saveDB(db);
+    const aiClient = getGeminiClient();
 
-    res.json({
-      success: true,
-      text: mockReply,
-      simulated: true
-    });
-    return;
-  }
+    if (!aiClient) {
+      // Elegant fallback simulation if no API Key is added yet
+      const responses = [
+        `¡Churr churr! *Capi mastica un poco de pasto* Me encanta hablar de "${topicName}". Has aprendido sobre: ${vocabulary}. ¡Tu inglés suena fantástico para el nivel ${levelText}! ¿Hay alguna palabra de esas que quieras que usemos en otra oración?`,
+        `*Capi flota feliz en su tina de agua caliente* ¡Perfecto! Tu mensaje es muy interesante. Recuerda que con esfuerzo serás todo un experto. ¿Me puedes decir cuál es tu fruta favorita en inglés?`,
+        `*Capi te guiña un ojo alegremente* ¡Excelente práctica! Sigamos platicando. ¿Qué opinas de practicar frases de agradecimiento? *churr churr*`
+      ];
+      const mockReply = responses[Math.floor(Math.random() * responses.length)];
 
-  try {
+      student.chats[moduleId].push({
+        role: "model",
+        text: mockReply,
+        timestamp: clientTimestamp
+      });
+
+      await saveProgress(student);
+
+      res.json({
+        success: true,
+        text: mockReply,
+        simulated: true
+      });
+      return;
+    }
+
     const formattedHistory = (history || []).map((h: any) => ({
       role: h.role,
       parts: [{ text: h.text }]
@@ -735,10 +881,7 @@ Tus objetivos principales son:
       timestamp: clientTimestamp
     });
 
-    saveDB(db);
-
-    // Background cloud synchronization to Firebase
-    syncProgressToFirebase(student);
+    await saveProgress(student);
 
     res.json({
       success: true,
@@ -748,16 +891,24 @@ Tus objetivos principales son:
 
   } catch (error: any) {
     console.error("Gemini invocation failed:", error);
-    const fallbackErrReply = `*Capi estornuda en el agua* ¡Achu! Perdona, hubo un pequeño cruce de cables con mi IA, pero estoy listo para seguir. ¿Seguimos repasando "${topicName}" en inglés? *churr churr*`;
-    student.chats[moduleId].push({
-      role: "model",
-      text: fallbackErrReply,
-      timestamp: clientTimestamp
-    });
-    saveDB(db);
-
-    // Background cloud synchronization to Firebase
-    syncProgressToFirebase(student);
+    const fallbackErrReply = `*Capi estornuda en el agua* ¡Achu! Perdona, hubo un pequeño cruce de cables con mi IA, pero estoy listo para seguir. ¿Seguimos repasando y practicando inglés? *churr churr*`;
+    
+    try {
+      const progressLogs = await fetchProgressLogs();
+      const student = progressLogs.find(p => p.userId === userId);
+      if (student) {
+        if (!student.chats) student.chats = {};
+        if (!student.chats[moduleId]) student.chats[moduleId] = [];
+        student.chats[moduleId].push({
+          role: "model",
+          text: fallbackErrReply,
+          timestamp: new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+        });
+        await saveProgress(student);
+      }
+    } catch (saveError) {
+      console.error("Error saving fallback chat:", saveError);
+    }
 
     res.json({
       success: true,

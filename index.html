@@ -4,6 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CapyLingo - Aprende inglés con Capi el carpincho</title>
+    <script>
+      // Safeguard for iframe environment where window.fetch might only have a getter.
+      // Defining a configurable getter/setter prevents errors when external scripts try to override fetch.
+      try {
+        const originalFetch = window.fetch;
+        let activeFetch = originalFetch;
+        Object.defineProperty(window, "fetch", {
+          get() {
+            return activeFetch;
+          },
+          set(value) {
+            activeFetch = value;
+          },
+          configurable: true,
+          enumerable: true,
+        });
+      } catch (e) {
+        console.warn("Could not define window.fetch property setter helper:", e);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
